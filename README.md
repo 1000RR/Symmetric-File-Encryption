@@ -1,4 +1,4 @@
-FILE-ENCRYPTION
+SYMMETRIC-FILE-ENCRYPTION
 ===============
 
 Deterministic, scriptable file encryption with **post‑quantum–resilient key derivation**, implemented using standard Unix tooling.
