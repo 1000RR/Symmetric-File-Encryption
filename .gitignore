@@ -1,0 +1,81 @@
+###############################################################################
+# OS / Editor / Tooling noise
+###############################################################################
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.nfs*
+.directory
+
+# Vim / editors
+*.swp
+*.swo
+*.swn
+*.tmp
+*.bak
+*.orig
+*.rej
+.vscode/
+.idea/
+
+###############################################################################
+# Shell / environment
+###############################################################################
+
+# Environment files (DO NOT COMMIT SECRETS)
+.env
+.env.*
+*.env
+
+###############################################################################
+# Encryption artifacts (generated, sensitive)
+###############################################################################
+
+# Ciphertext sidecars
+*.iv
+*.hmac
+
+# Encrypted outputs (ledger-free and ledger-based)
+*.enc
+
+# Ledger files (contain filename mappings + timestamps)
+*.ledger
+
+###############################################################################
+# Temporary files
+###############################################################################
+
+tmp/
+temp/
+*.log
+
+###############################################################################
+# Optional: packaged binaries or vendored crypto (if ever added)
+###############################################################################
+
+# Uncomment if you later archive static OpenSSL binaries
+# openssl-static/
+# openssl-*/
+
+###############################################################################
+# Optional: test fixtures (if you generate local test data)
+###############################################################################
+
+# testdata/
+# fixtures/

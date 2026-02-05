@@ -1,0 +1,137 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+log() { echo "[encrypt] $*"; }
+die() { echo "Error: $*" >&2; exit 1; }
+
+# ------------------------------------------------------------
+# Reject unknown flags (ONLY -k allowed)
+# ------------------------------------------------------------
+if [[ "${1-}" == -* && "${1-}" != "-k" ]]; then
+  die "unknown option '$1' (only supported option is: -k <ENVVAR>)"
+fi
+
+# ------------------------------------------------------------
+# Usage
+# ------------------------------------------------------------
+# encryptfile-with-ledger.zsh <secret> <salt> <ledger> <input> <outdir>
+# encryptfile-with-ledger.zsh -k <ENVVAR> <ledger> <input> <outdir>
+# ------------------------------------------------------------
+
+USE_DERIVED_KEYS=0
+ENV_KEY_NAME=""
+
+if [[ "${1-}" == "-k" ]]; then
+  [[ $# -eq 5 ]] || die "Usage: $0 -k <ENVVAR> <ledger> <input> <outdir>"
+  USE_DERIVED_KEYS=1
+  ENV_KEY_NAME="$2"
+  LEDGER="$3"
+  INPUT="$4"
+  OUTDIR="$5"
+else
+  [[ $# -eq 5 ]] || die "Usage: $0 <secret> <salt> <ledger> <input> <outdir>"
+  SECRET="$1"
+  SALT="$2"
+  LEDGER="$3"
+  INPUT="$4"
+  OUTDIR="$5"
+fi
+
+# ------------------------------------------------------------
+# Path resolution (no Python)
+# ------------------------------------------------------------
+resolve() {
+  if command -v realpath >/dev/null 2>&1; then
+    realpath "$1"
+  elif command -v readlink >/dev/null 2>&1; then
+    readlink -f "$1"
+  else
+    die "neither realpath nor readlink available"
+  fi
+}
+
+log "Validating inputs..."
+[[ -f "$LEDGER" ]] || die "ledger missing: $LEDGER"
+[[ -f "$INPUT"  ]] || die "input missing: $INPUT"
+[[ -d "$OUTDIR" ]] || die "output_dir invalid: $OUTDIR"
+
+LEDGER_ABS="$(resolve "$LEDGER")"
+INPUT_ABS="$(resolve "$INPUT")"
+[[ "$LEDGER_ABS" != "$INPUT_ABS" ]] || die "input file is the same as ledger"
+
+[[ "$OUTDIR" != /* ]] && OUTDIR="$(pwd)/$OUTDIR"
+
+# ------------------------------------------------------------
+# UUIDv4 generation (no Python)
+# ------------------------------------------------------------
+gen_uuid32() {
+  local h
+  h="$(openssl rand -hex 16)"
+  printf '%s%s%s%s\n' \
+    "${h:0:12}" \
+    "4${h:13:3}" \
+    "$(printf '%x' $(( (0x${h:16:1} & 0x3) | 0x8 )))${h:17:3}" \
+    "${h:20:12}"
+}
+
+log "Selecting output filename..."
+while :; do
+  UUID="$(gen_uuid32)"
+  OUT="$OUTDIR/$UUID.enc"
+  [[ ! -e "$OUT" && ! -e "$OUT.iv" && ! -e "$OUT.hmac" ]] && break
+done
+
+# ------------------------------------------------------------
+# Key handling
+# ------------------------------------------------------------
+if [[ "$USE_DERIVED_KEYS" -eq 1 ]]; then
+  log "Using derived ENC|||MAC keys from \$${ENV_KEY_NAME}"
+  RAW="${(P)ENV_KEY_NAME}"
+  [[ "$RAW" == *"|||"* ]] || die "ENVVAR must contain ENC_KEY|||MAC_KEY"
+
+  ENC_KEY="${RAW%%|||*}"
+  MAC_KEY="${RAW##*|||}"
+
+  [[ "$ENC_KEY" =~ ^[0-9a-fA-F]{64}$ ]] || die "invalid ENC key format"
+  [[ "$MAC_KEY" =~ ^[0-9a-fA-F]{64}$ ]] || die "invalid MAC key format"
+else
+  log "Deriving keys via Argon2"
+  ENC_KEY="$(printf '%s' "$SECRET" \
+    | argon2 "${SALT}|enc" -id -m 23 -t 3 -p 1 -r \
+    | openssl dgst -sha256 -binary | xxd -p -c 256)"
+  MAC_KEY="$(printf '%s' "$SECRET" \
+    | argon2 "${SALT}|mac" -id -m 23 -t 3 -p 1 -r \
+    | openssl dgst -sha256 -binary | xxd -p -c 256)"
+fi
+
+# ------------------------------------------------------------
+# Encrypt
+# ------------------------------------------------------------
+log "Encrypting (AES-256-CTR)..."
+IV="$(openssl rand -hex 16)"
+
+openssl enc -aes-256-ctr \
+  -K "$ENC_KEY" \
+  -iv "$IV" \
+  -in "$INPUT" \
+  -out "$OUT"
+
+log "Computing HMAC..."
+TMP="$(mktemp)"
+trap 'rm -f "$TMP"' EXIT
+printf '%s' "$IV" | xxd -r -p > "$TMP"
+cat "$OUT" >> "$TMP"
+
+HMAC="$(openssl dgst -sha256 -mac HMAC -macopt hexkey:"$MAC_KEY" "$TMP" | awk '{print $NF}')"
+
+echo "$IV"   > "$OUT.iv"
+echo "$HMAC" > "$OUT.hmac"
+
+log "Updating ledger..."
+printf '%s|%s|%s\n' \
+  "$(basename "$OUT")" \
+  "$(basename "$INPUT")" \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$LEDGER"
+
+log "Done."
+echo "Encrypted: $OUT"

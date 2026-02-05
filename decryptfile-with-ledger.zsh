@@ -1,0 +1,111 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+log() { echo "[decrypt] $*"; }
+die() { echo "Error: $*" >&2; exit 1; }
+
+# ------------------------------------------------------------
+# Reject unknown flags (ONLY -k allowed)
+# ------------------------------------------------------------
+if [[ "${1-}" == -* && "${1-}" != "-k" ]]; then
+  die "unknown option '$1' (only supported option is: -k <ENVVAR>)"
+fi
+
+# ------------------------------------------------------------
+# Usage
+# ------------------------------------------------------------
+# decryptfile-with-ledger.zsh <secret> <salt> <ledger> <enc> <outdir>
+# decryptfile-with-ledger.zsh -k <ENVVAR> <ledger> <enc> <outdir>
+# ------------------------------------------------------------
+
+USE_DERIVED_KEYS=0
+ENV_KEY_NAME=""
+
+if [[ "${1-}" == "-k" ]]; then
+  [[ $# -eq 5 ]] || die "Usage: $0 -k <ENVVAR> <ledger> <enc> <outdir>"
+  USE_DERIVED_KEYS=1
+  ENV_KEY_NAME="$2"
+  LEDGER="$3"
+  ENC="$4"
+  OUTDIR="$5"
+else
+  [[ $# -eq 5 ]] || die "Usage: $0 <secret> <salt> <ledger> <enc> <outdir>"
+  SECRET="$1"
+  SALT="$2"
+  LEDGER="$3"
+  ENC="$4"
+  OUTDIR="$5"
+fi
+
+log "Validating inputs..."
+[[ -f "$LEDGER" ]] || die "ledger missing"
+[[ -f "$ENC"    ]] || die "encrypted file missing"
+[[ -d "$OUTDIR" ]] || die "output_dir invalid"
+
+IV_FILE="$ENC.iv"
+HMAC_FILE="$ENC.hmac"
+[[ -f "$IV_FILE" && -f "$HMAC_FILE" ]] || die "missing .iv or .hmac"
+
+# ------------------------------------------------------------
+# Ledger lookup BEFORE crypto
+# ------------------------------------------------------------
+log "Looking up ledger entry..."
+UUID="$(basename "$ENC")"
+LINE="$(grep -F "$UUID|" "$LEDGER" || true)"
+[[ -n "$LINE" ]] || die "ledger entry not found"
+
+ORIG="${LINE#*|}"
+ORIG="${ORIG%%|*}"
+OUT="$OUTDIR/$ORIG"
+[[ ! -e "$OUT" ]] || die "output already exists"
+
+# ------------------------------------------------------------
+# Key handling
+# ------------------------------------------------------------
+if [[ "$USE_DERIVED_KEYS" -eq 1 ]]; then
+  log "Using derived ENC|||MAC keys from \$${ENV_KEY_NAME}"
+  RAW="${(P)ENV_KEY_NAME}"
+  [[ "$RAW" == *"|||"* ]] || die "ENVVAR must contain ENC_KEY|||MAC_KEY"
+
+  ENC_KEY="${RAW%%|||*}"
+  MAC_KEY="${RAW##*|||}"
+
+  [[ "$ENC_KEY" =~ ^[0-9a-fA-F]{64}$ ]] || die "invalid ENC key format"
+  [[ "$MAC_KEY" =~ ^[0-9a-fA-F]{64}$ ]] || die "invalid MAC key format"
+else
+  log "Deriving keys via Argon2"
+  ENC_KEY="$(printf '%s' "$SECRET" \
+    | argon2 "${SALT}|enc" -id -m 23 -t 3 -p 1 -r \
+    | openssl dgst -sha256 -binary | xxd -p -c 256)"
+  MAC_KEY="$(printf '%s' "$SECRET" \
+    | argon2 "${SALT}|mac" -id -m 23 -t 3 -p 1 -r \
+    | openssl dgst -sha256 -binary | xxd -p -c 256)"
+fi
+
+# ------------------------------------------------------------
+# Verify HMAC
+# ------------------------------------------------------------
+log "Verifying HMAC..."
+IV="$(tr -d '\n' < "$IV_FILE")"
+STORED="$(tr -d '\n' < "$HMAC_FILE")"
+
+TMP="$(mktemp)"
+trap 'rm -f "$TMP"' EXIT
+printf '%s' "$IV" | xxd -r -p > "$TMP"
+cat "$ENC" >> "$TMP"
+
+CALC="$(openssl dgst -sha256 -mac HMAC -macopt hexkey:"$MAC_KEY" "$TMP" | awk '{print $NF}')"
+[[ "$CALC" == "$STORED" ]] || die "HMAC verification failed"
+
+# ------------------------------------------------------------
+# Decrypt
+# ------------------------------------------------------------
+log "Decrypting (AES-256-CTR)..."
+openssl enc -d -aes-256-ctr \
+  -K "$ENC_KEY" \
+  -iv "$IV" \
+  -in "$ENC" \
+  -out "$OUT"
+
+log "Done."
+echo "Recovered: $OUT"
