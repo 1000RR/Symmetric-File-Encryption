@@ -51,6 +51,8 @@ $RECYCLE.BIN/
 *.iv
 *.hmac
 
+ledgerfile
+
 # Encrypted outputs (ledger-free and ledger-based)
 *.enc
 
