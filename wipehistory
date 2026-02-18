@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# wipehistory — purges history entries for executables in the *current directory*.
+# Designed to eliminate credential leakage via command-line exposure.
+
+set -euo pipefail
+
+HIST_ZSH="$HOME/.zsh_history"
+HIST_BASH="$HOME/.bash_history"
+
+# ----------------------
+# 1. Use current working directory — this is the *real* target
+# ----------------------
+TARGET_DIR="$PWD"
+echo "📁 Target directory: $TARGET_DIR"
+
+# Confirm the current directory exists and is accessible
+if [[ ! -d "$TARGET_DIR" ]]; then
+  echo "❌ Current directory not accessible: $TARGET_DIR" >&2
+  exit 1
+fi
+
+# ----------------------
+# 2. Discover *local executables* (only in $PWD, no recursive, no .git/hooks)
+# ----------------------
+EXECUTABLES=()
+
+while IFS= read -r -d '' file; do
+  # Skip .git, hidden files (e.g., .config), and sample hooks
+  dir_part=$(dirname "$file")
+  [[ "$dir_part" == *".git/hooks"* ]] && continue
+
+  bn=$(basename "$file")
+  # Only include actual user scripts/binaries — filter for security relevance:
+  #   - must *not* end with `.sample` (Git hooks)
+  #   - must *not* start with a dot (e.g., .DS_Store, .gitignore)
+  #   - must be executable by current user
+  [[ "$bn" == *.sample ]] && continue
+  [[ "$bn" == .* ]] && continue
+
+  # Verify executability robustly (works on macOS & Linux)
+  if [[ -x "$file" ]]; then
+    EXECUTABLES+=("$bn")
+  fi
+done < <(find "$TARGET_DIR" -maxdepth 1 -type f -print0 2>/dev/null)
+
+# Deduplicate (simple O(n²), but fine for <100 files)
+DEDUPED=()
+for name in "${EXECUTABLES[@]+"${EXECUTABLES[@]}"}"; do
+  for d in "${DEDUPED[@]+"${DEDUPED[@]}"}"; do
+    [[ "$d" == "$name" ]] && continue 2
+  done
+  DEDUPED+=("$name")
+done
+EXECUTABLES=("${DEDUPED[@]+"${DEDUPED[@]}"}")
+
+if [[ ${#EXECUTABLES[@]} -eq 0 ]]; then
+  echo "⚠️ No executables found in $TARGET_DIR — nothing to wipe." >&2
+  exit 0
+fi
+
+echo "🔍 Found ${#EXECUTABLES[@]} local executables:"
+printf '  • %s\n' "${EXECUTABLES[@]}" | sort -u
+echo
+
+# ----------------------
+# 3. Safely sanitize history files — in-place, no backups
+# ----------------------
+sanitize_and_zero() {
+  local file=$1
+  [[ -f "$file" ]] || return 0
+
+  local tmp=".wipehistory_tmp_$$"
+  : > "$tmp"  # empty temp file
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    keep=true
+    for name in "${EXECUTABLES[@]+"${EXECUTABLES[@]}"}"; do
+      if [[ "$line" == *"$name"* ]]; then
+        keep=false
+        break
+      fi
+    done
+    $keep && printf '%s\n' "$line"
+  done <"$file" >> "$tmp"
+
+  # Overwrite original (truncates in place)
+  cat "$tmp" > "$file"
+
+  # Zero temp file and unlink
+  truncate -s 0 "$tmp"
+  rm -f "$tmp"
+
+  # Sync — best effort
+  sync
+
+  echo "🧹 Purged: $file"
+}
+
+for hist in "$HIST_ZSH" "$HIST_BASH"; do
+  sanitize_and_zero "$hist"
+done
+
+# ----------------------
+# 4. Verification & user advisory
+# ----------------------
+leak_found=false
+for exe in "${EXECUTABLES[@]+"${EXECUTABLES[@]}"}"; do
+  if grep -qF "$exe" "$HIST_ZSH" 2>/dev/null || \
+     grep -qF "$exe" "$HIST_BASH" 2>/dev/null; then
+    echo "⚠️ WARNING: '$exe' still found in history (possible alias/function?)" >&2
+    leak_found=true
+  fi
+done
+
+$leak_found || echo "✅ Confirmed: no local executables remain in history."
+
+# Safely handle PS1 (check if shell is interactive *and* variable set)
+if [[ -t 0 ]] && [[ ${PS1+x} ]]; then
+  echo "💡 Tip: In this shell, run 'history -c && history -w' to clear in-memory session."
+fi
+
+echo
+echo "🚀 Wipe complete. Zero backups retained."
