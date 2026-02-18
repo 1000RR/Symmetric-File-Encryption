@@ -1,0 +1,116 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+source scriptnames.conf
+
+log() { echo "[decrypt-all] $*"; }
+dbg() { echo "[DEBUG] $*"; }
+die() { echo "Error: $*" >&2; exit 1; }
+
+usage() {
+  cat >&2 <<EOF
+Usage:
+  decrypt-all-ledger-files.zsh <secret> <salt> <ledger> <outdir>
+  decrypt-all-ledger-files.zsh -k <ENVVAR_NAME> <ledger> <outdir>
+
+Notes:
+  - ENVVAR_NAME must be the NAME of an environment variable
+  - That variable must contain ENC_KEY_HEX|||MAC_KEY_HEX
+  - decryptfile-with-ledger.zsh must be in PATH
+EOF
+  exit 1
+}
+
+# ------------------------------------------------------------
+# Argument parsing
+# ------------------------------------------------------------
+USE_K=0
+KEY_VAR=""
+LEDGER=""
+OUTDIR=""
+SECRET=""
+SALT=""
+
+if [[ "${1-}" == "-k" ]]; then
+  [[ $# -eq 4 ]] || usage
+  USE_K=1
+  KEY_VAR="$2"          # NAME ONLY (e.g. MYKEY)
+  LEDGER="$3"
+  OUTDIR="$4"
+else
+  [[ $# -eq 4 ]] || usage
+  SECRET="$1"
+  SALT="$2"
+  LEDGER="$3"
+  OUTDIR="$4"
+fi
+
+# ------------------------------------------------------------
+# Validation
+# ------------------------------------------------------------
+log "Validating inputs..."
+
+dbg "USE_K=$USE_K"
+dbg "KEY_VAR=$KEY_VAR"
+dbg "LEDGER=$LEDGER"
+dbg "OUTDIR=$OUTDIR"
+
+[[ -f "$LEDGER" ]] || die "ledger file not found: $LEDGER"
+[[ -d "$OUTDIR" ]] || die "output directory not found: $OUTDIR"
+
+command -v $LEDGERDECRYPTFILE >/dev/null 2>&1 \
+  || die "decryptfile-with-ledger.zsh not found in PATH"
+
+if [[ "$USE_K" -eq 1 ]]; then
+  [[ "$KEY_VAR" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
+    || die "-k argument must be an ENV VAR NAME (example: MYKEY)"
+fi
+
+TOTAL="$(grep -c '|' "$LEDGER" || true)"
+[[ "$TOTAL" -gt 0 ]] || die "ledger appears empty"
+
+log "Found $TOTAL ledger entries"
+
+# ------------------------------------------------------------
+# Iterate ledger safely
+# ------------------------------------------------------------
+i=0
+SUCCESS=0
+
+awk -F'|' '
+  { sub(/\r$/, "", $0); if (NF >= 3) print $1 "|" $2 "|" $3 }
+' "$LEDGER" |
+while IFS='|' read -r ENC_NAME ORIG_NAME TS; do
+  ((++i))
+
+  ENC_PATH="$(dirname "$LEDGER")/$ENC_NAME"
+
+  log "[$i/$TOTAL] Decrypting $ENC_NAME → $ORIG_NAME"
+
+  dbg "ARGS => -k[$KEY_VAR] ledger=[$LEDGER] enc=[$ENC_PATH] outdir=[$OUTDIR]"
+
+  if [[ "$USE_K" -eq 1 ]]; then
+    $LEDGERDECRYPTFILE \
+      -k "$KEY_VAR" \
+      "$LEDGER" \
+      "$ENC_PATH" \
+      "$OUTDIR"
+  else
+    $LEDGERDECRYPTFILE \
+      "$SECRET" \
+      "$SALT" \
+      "$LEDGER" \
+      "$ENC_PATH" \
+      "$OUTDIR"
+  fi
+
+  ((SUCCESS++))
+done
+
+# ------------------------------------------------------------
+# Final summary
+# ------------------------------------------------------------
+echo
+echo "PROCESSED $SUCCESS out of $TOTAL"
+
+log "All files decrypted successfully."
