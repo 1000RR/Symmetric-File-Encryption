@@ -58,7 +58,7 @@ dbg "OUTDIR=$OUTDIR"
 [[ -f "$LEDGER" ]] || die "ledger file not found: $LEDGER"
 [[ -d "$OUTDIR" ]] || die "output directory not found: $OUTDIR"
 
-command -v $LEDGERDECRYPTFILE >/dev/null 2>&1 \
+command -v $LEDGER_DECRYPT_FILE >/dev/null 2>&1 \
   || die "decryptfile-with-ledger.zsh not found in PATH"
 
 if [[ "$USE_K" -eq 1 ]]; then
@@ -90,13 +90,13 @@ while IFS='|' read -r ENC_NAME ORIG_NAME TS; do
   dbg "ARGS => -k[$KEY_VAR] ledger=[$LEDGER] enc=[$ENC_PATH] outdir=[$OUTDIR]"
 
   if [[ "$USE_K" -eq 1 ]]; then
-    $LEDGERDECRYPTFILE \
+    $LEDGER_DECRYPT_FILE \
       -k "$KEY_VAR" \
       "$LEDGER" \
       "$ENC_PATH" \
       "$OUTDIR"
   else
-    $LEDGERDECRYPTFILE \
+    $LEDGER_DECRYPT_FILE \
       "$SECRET" \
       "$SALT" \
       "$LEDGER" \
@@ -114,3 +114,8 @@ echo
 echo "PROCESSED $SUCCESS out of $TOTAL"
 
 log "All files decrypted successfully."
+
+# #CLEANING UP HISTORY
+# printf 'SANITIZING CLI HISTORY'
+# SCRIPT_DIR="${0:A:h}"
+# $SCRIPT_DIR/$SANITIZE_CLI_HISTORY

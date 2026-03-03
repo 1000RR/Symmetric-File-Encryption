@@ -107,3 +107,8 @@ echo "$HMAC" > "$OUT.hmac"
 
 log "Done."
 echo "Encrypted: $OUT"
+
+# #CLEANING UP HISTORY
+# printf 'SANITIZING CLI HISTORY'
+# SCRIPT_DIR="${0:A:h}"
+# $SCRIPT_DIR/$SANITIZE_CLI_HISTORY
