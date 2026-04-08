@@ -2,6 +2,8 @@
 # OS / Editor / Tooling noise
 ###############################################################################
 
+git-exclude
+
 # macOS
 .DS_Store
 .AppleDouble
