@@ -3,6 +3,19 @@ set -euo pipefail
 
 source scriptnames.conf
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if ! command -v argon2 &> /dev/null; then
+    printf "\033[31mInstalling necessary dependency argon2 via brew\033[0m\n"
+    brew install argon2
+    if ! command -v argon2 &> /dev/null; then
+        printf "\033[31mError: Failed to install argon2. Please check brew and try again.\033[0m\n" >&2
+        exit 1
+    fi
+else
+    echo "argon2 is already installed. Proceeding..."
+fi
+
 log() { echo "[encrypt] $*"; }
 die() { echo "Error: $*" >&2; exit 1; }
 
@@ -137,3 +150,7 @@ printf '%s|%s|%s\n' \
 
 log "Done."
 echo "Encrypted: $OUT"
+
+echo "SANITIZING .bash_history and .zsh_history files"
+$SCRIPT_DIR/sanitize-cli-history
+
