@@ -150,17 +150,19 @@ main() {
 
     [ -e "$target" ] || die "Path does not exist: $target"
 
-    red_prompt "DO YOU WANT TO SHRED $target? "
+    red_prompt "DO YOU WANT TO SHRED $target? [yes/anything] "
     IFS= read -r answer || exit 1
 
     case $answer in
         yes|YES)
             ;;
         no|NO)
-            exit 0
+            echo "EXITING" 
+			exit 0
             ;;
         *)
-            exit 0
+            echo "EXITING" 
+			exit 0
             ;;
     esac
 
